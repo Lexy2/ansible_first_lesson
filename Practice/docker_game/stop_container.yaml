@@ -3,7 +3,8 @@
   hosts: nodes
   gather_facts: true
   vars:
-    containers: ["webmario", "webdoom"]
+    # containers: ["webmario", "webdoom"]
+    containers: ["webmario"]
   become: true
   tasks:
     - name: stop containers

@@ -7,36 +7,65 @@
   vars:
     mario: true
     mario_port: 9999
-    doom: true
+    doom: false
     doom_port: 8888
   tasks:
-    - name: add docker repo
-      get_url:
-        url: "https://download.docker.com/linux/centos/docker-ce.repo"
-        dest: '/etc/yum.repos.d/docker-ce.repo'
-        owner: root
-        group: root
-        mode: 0644
+    - name: sync time
+      become: true
+      shell:
+        cmd: "chronyc -a makestep"
 
-    - name: install epel-release for repos with python2-pip
-      yum:
-        name:
-          - epel-release
-        state: present
+    - name: apt update
+      apt:
+        update_cache: yes
 
-    - name: install docker-ce and python2-pip
-      yum:
-        name:
-          - docker-ce
-          - python2-pip
-        state: present
-        update_cache: true
+    - name: install apt prerequisites
+      apt:
+        name: 
+          - apt-transport-https
+          - ca-certificates
+          - software-properties-common
+    - name: install docker apt key
+      apt_key:
+        url: "https://download.docker.com/linux/ubuntu/gpg"
+    - name: add docker apt repo
+      apt_repository:
+        repo: "deb https://download.docker.com/linux/ubuntu focal stable"
+    - name: install docker
+      apt:
+        name: docker-ce
+    # - name: add universe repo
+    #   become: true
+    #   shell:
+    #     cmd: "add-apt-repository universe"
+      # apt_repository:
+      #   repo: "deb http://archive.ubuntu.com/ubuntu focal universe"
+      #   update_cache: yes
+    - name: uninstall python2
+      apt:
+        name: python2
+        state: absent
+        # update_cache: yes
+    # - name: download get-pip
+    #   get_url:
+    #     url: "https://bootstrap.pypa.io/pip/2.7/get-pip.py"
+    #     dest: "/root/get-pip.py"
+    #   become: true
+    # - name: install pip
+    #   become: true
+    #   shell:
+    #     chdir: "/root"
+    #     cmd: "python2 get-pip.py"
+    - name: install pip
+      become: true
+      apt:
+        name: python3-pip
 
     - name: install docker-py + particular version of websocket
       pip:
-        executable: /usr/bin/pip2
+        # executable: /usr/local/bin/pip3
         name:
-          - docker-py
+          - docker
           - websocket-client==0.32.0
 
     - name: ensure docker is started
@@ -45,21 +74,66 @@
         state: started
         enabled: true
 
-    # Долгий этап. Скачивание образа из dockerhub
-    - name: run webdoom
-      community.docker.docker_container:
-        name: webdoom
-        image: "jakolehm/http-doom:0.1.0"
-        # image: "mattipaksula/http-doom:latest"
-        ports:
-          - "{{ doom_port }}:8080"
-      when: doom
+    - name: ensure ufw installed
+      apt:
+        name: ufw
+      register: ufw_installed
+
+    - name: configure ufw default deny incoming
+      community.general.ufw:
+        default: deny
+        direction: incoming
+
+    - name: configure ufw default allow outgoing
+      community.general.ufw:
+        default: allow
+        direction: outgoing
+
+    - community.general.ufw:
+        rule: allow
+        name: OpenSSH
+      register: ssh_fw
+
+    - name: Allow game ports
+      community.general.ufw:
+        rule: allow
+        port: '{{ var_port }}'
+        proto: tcp
+      loop: ['{{ mario_port }}', '{{ doom_port }}']
+      loop_control:
+        loop_var: var_port
+
+    - name: Allow mario port
+      community.general.ufw:
+        rule: allow
+        port: '{{ mario_port }}'
+        proto: tcp
+      register: mario_port_fw
+
+    - community.general.ufw:
+        state: disabled
+      when: mario_port_fw.changed or ssh_fw.changed or ufw_installed.changed
+
+    - community.general.ufw:
+        state: enabled
+
+    # # Нету вебдума под aarch64
+    # # Долгий этап. Скачивание образа из dockerhub
+    # - name: run webdoom
+    #   community.docker.docker_container:
+    #     name: webdoom
+    #     # image: "jakolehm/http-doom:0.1.0"
+    #     image: "atalabirchuk/doom:1.0.1"
+    #     ports:
+    #       - "{{ doom_port }}:8080"
+    #   when: doom
 
     # Долгий этап. Скачивание образа из dockerhub
     - name: run web mario
       community.docker.docker_container:
         name: webmario
-        image: kaminskypavel/mario
+        # image: kaminskypavel/mario
+        image: dungtri/mario
         ports:
           - "{{ mario_port }}:8080"
       when: mario

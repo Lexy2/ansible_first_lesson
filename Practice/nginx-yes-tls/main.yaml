@@ -1,0 +1,135 @@
+---
+- name: configure webserver with tls
+  hosts: nodes
+  gather_facts: true
+  become: true
+  vars:
+    nginx_port_no_tls: 80
+    nginx_port_tls: 443
+    var_name_key: "{{ ansible_host }}.key"
+    var_name_cert: "{{ ansible_host }}.crt"
+    var_path_key: "ssl/{{ var_name_key }}"
+    var_path_cert: "ssl/{{ var_name_cert }}"
+    var_fullpath_key: "/etc/nginx/{{ var_path_key }}"
+    var_fullpath_cert: "/etc/nginx/{{ var_path_cert }}"
+  tasks:
+    # - name: create nginx repo definition
+    #   copy:
+    #     src: nginx.repo
+    #     dest: /etc/yum.repos.d/nginx.repo
+    #     owner: root
+    #     group: root
+    #     mode: 0644
+    
+    # Увы, в моей конфигурации на виртуалке не идут часы, когда ноутбук спит
+    # Поэтому перед любыми времязависимыми операциями надобно обновлять часы
+    - name: sync time
+      become: true
+      shell:
+        cmd: "chronyc -a makestep"
+
+    - name: install nginx
+      apt:
+        name: nginx
+        update_cache: true
+        state: present
+
+    - name: copy main nginx config file
+      copy:
+        src: files/nginx.conf
+        dest: /etc/nginx/nginx.conf
+        owner: root
+        group: root
+        mode: 0644
+      notify: restart nginx
+
+    - name: ensure nginx ssl folder exists
+      file:
+        path: /etc/nginx/ssl
+        state: directory
+        mode: 0600
+        owner: root
+        group: root
+
+    - name: generate nginx private key
+      community.crypto.openssl_privatekey:
+        path: "{{ var_fullpath_key }}"
+      register: pk_result
+
+    - name: generate CSR for private key
+      community.crypto.openssl_csr_pipe:
+        privatekey_path: "{{ var_fullpath_key }}"
+        common_name: "{{ ansible_host }}"
+      register: csr
+
+    - name: create self-signed cert from CSR
+      community.crypto.x509_certificate:
+        path: "{{ var_fullpath_cert }}"
+        csr_content: "{{ csr.csr }}"
+        privatekey_path: "{{ var_fullpath_key }}"
+        provider: selfsigned
+      register: cert_result
+
+    - name: copy site's nginx config file
+      template:
+        src: templates/nginx.conf.j2
+        dest: /etc/nginx/conf.d/tlsandnotls.conf
+        owner: root
+        group: root
+        mode: 0644
+      notify: restart nginx
+
+    - name: ensure previous config no longer exists
+      file:
+        path: /etc/nginx/conf.d/notls.conf
+        state: absent
+      notify: restart nginx
+
+    - name: copy index.html
+      template:
+        src: templates/index.html.j2
+        dest: /usr/share/nginx/html/index.html
+        owner: root
+        group: root
+        mode: 0644
+      notify: restart nginx
+
+    - name: ensure nginx is enabled and started
+      service:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: insert ufw rule for nginx
+      community.general.ufw:
+        rule: allow
+        name: Nginx Full
+      notify: restart ufw
+
+  post_tasks:
+    - name: check web site from control server
+      uri:
+        url: "http://{{ ansible_host }}:{{ nginx_port_no_tls }}"
+        return_content: true
+      connection: local
+      register: example_webpage_out
+      failed_when: example_webpage_out.status != 200
+
+    - name: check https web site from control server
+      uri:
+        url: "https://{{ ansible_host }}:{{ nginx_port_tls }}"
+        return_content: true
+        validate_certs: no
+      connection: local
+      register: example_webpage_out_https
+      failed_when: example_webpage_out_https.status != 200
+
+  handlers:
+    - name: restart ufw
+      community.general.ufw:
+        state: reloaded
+
+    - name: restart nginx
+      service:
+        name: nginx
+        state: restarted

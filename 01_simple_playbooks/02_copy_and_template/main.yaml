@@ -5,7 +5,7 @@
     custom_var: ansible
     user_home_dir: /home/ansible
   vars_files:
-      - vars/main.yaml
+      - vars/vars.yaml
   tasks:
     - name: copy file from files directory
       copy:
